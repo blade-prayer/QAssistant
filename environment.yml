@@ -1,0 +1,9 @@
+name: Competetion
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pandoc
+  - pip:
+      - -r requirements.txt

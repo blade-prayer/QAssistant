@@ -2,6 +2,7 @@
 python-dotenv
 dill
 json_repair
+PyYAML
 
 # Core 
 openai
@@ -17,6 +18,12 @@ akshare
 efinance
 matplotlib
 seaborn
+requests
+httpx
+aiohttp
+chardet
+tqdm
+IPython
 
 # Document Processing
 pdfplumber

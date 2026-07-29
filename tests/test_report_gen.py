@@ -32,7 +32,7 @@ if __name__ == "__main__":
     collect_tasks = ['最近股价', '商汤科技的资产负债表']
     analysis_tasks = ['公司发展历程及主营业务分析', '公司股权结构分析']
     
-    config = Config(config_file='my_config.yaml')
+    config = Config(config_file_path='my_config.yaml')
     
     # 初始化memory
     memory = Memory(config=config)

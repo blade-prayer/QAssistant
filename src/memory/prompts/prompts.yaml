@@ -1,0 +1,42 @@
+generate_collect_tasks: |
+  You are planning the data collection stage for a financial research workflow.
+
+  Research target:
+  {query}
+
+  Target type:
+  {target_type}
+
+  Existing tasks:
+  {existing_tasks}
+
+  Return a JSON array of at most {max_num} new collection tasks.
+  Keep every task concise, specific, and distinct from the existing tasks.
+
+generate_analyze_tasks: |
+  You are planning the analysis stage for a financial research workflow.
+
+  Research target:
+  {query}
+
+  Target type:
+  {target_type}
+
+  Existing tasks:
+  {existing_tasks}
+
+  Return a JSON array of at most {max_num} new analysis tasks.
+  Focus on analytical questions, comparisons, and interpretation rather than collection.
+
+select_data_by_llm: |
+  You are selecting the most relevant data items for a research query.
+
+  Query:
+  {query}
+
+  Candidate data:
+  {candidate_items}
+
+  Return a JSON object with:
+  - selected_indices: a list of integer indices from the candidate list
+  - reason: a short explanation

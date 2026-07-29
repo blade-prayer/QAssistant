@@ -26,6 +26,10 @@ outputs/
 **/user_configs/
 **/agent_working/
 **/memory/
+!src/memory/
+!src/memory/**
+src/memory/**/__pycache__/
+src/memory/**/*.py[cod]
 *.pkl
 
 # History and cache
@@ -40,8 +44,6 @@ build/
 
 # Environment variables - IMPORTANT: never commit API keys!
 .env
-.env.*
-!.env.example
 
 # IDE
 .vscode/

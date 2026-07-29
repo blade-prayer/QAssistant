@@ -98,7 +98,7 @@ class Config:
         self.config['output_dir'] = output_dir
         target = self.config.get('target_name', 'unknown')
         save_note = self.config.get('save_note', None)
-        target = target[:50]
+        target = target[:50]  # 用哈希截断 + 保留前几个可读字符
         if save_note:
             target = str(save_note) + '_' + target
         self.working_dir = os.path.join(output_dir, target)

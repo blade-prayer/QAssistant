@@ -88,8 +88,8 @@ FinSight is still under development and there are many issues and room for impro
 
 ### Prerequisites
 
-- Python 3.10+
-- Pandoc (for polished DOCX/PDF export)
+- Conda with Python 3.11 support
+- Pandoc (installed by `environment.yml` for DOCX export)
 - Node.js (optional, for the web UI)
 - API keys for your LLM stack (LLM, VLM, Embedding, Search)
 
@@ -100,11 +100,18 @@ FinSight is still under development and there are many issues and room for impro
 git clone https://github.com/RUC-NLPIR/FinSight.git
 cd FinSight
 
-# Install Python dependencies
-pip install -r requirements.txt
+# Create and activate the Python runtime
+conda env create -f environment.yml
+conda activate Competetion
+
+# Install the browser used by Playwright-powered web tooling
+python -m playwright install chromium
 ```
 
-Install Pandoc (recommended):
+`environment.yml` installs Pandoc from conda-forge and delegates Python packages to `requirements.txt`.
+DOCX generation requires Pandoc. PDF conversion uses `docx2pdf` and is best-effort because it depends on host desktop support.
+
+Install Pandoc manually only if you are not using the Conda environment:
 
 ```bash
 # Linux
@@ -118,7 +125,7 @@ brew install pandoc
 # https://github.com/jgm/pandoc/releases/latest
 ```
 
-Build the web UI (optional):
+Build the web UI separately with Node.js (optional):
 
 ```bash
 cd demo/frontend
