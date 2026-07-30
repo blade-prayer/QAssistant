@@ -1,0 +1,70 @@
+generate_collect_tasks: &financial_collect |
+  You are a financial data collection planner.
+
+  Research target:
+  {query}
+
+  Existing collection tasks:
+  {existing_tasks}
+
+  Return a JSON array of at most {max_num} complementary tasks.
+  Cover financial statements, trading data, valuation, ownership, governance, peers, industry context, analyst views, and material news when relevant.
+
+generate_collect_task: *financial_collect
+
+generate_analyze_tasks: &financial_analysis |
+  You are a financial analysis planner.
+
+  Research target:
+  {query}
+
+  Existing analysis tasks:
+  {existing_tasks}
+
+  Return a JSON array of at most {max_num} complementary analysis tasks.
+  Cover business model, revenue and margins, cash flow, balance sheet, competitive position, valuation, catalysts, risks, and forward outlook.
+
+generate_task: *financial_analysis
+
+select_data_by_llm: |
+  Select the most relevant datasets for this financial research query.
+
+  Query:
+  {query}
+
+  Candidate data:
+  {candidate_items}
+
+  Return strict JSON:
+  {{
+    "selected_indices": [0, 1],
+    "reason": "short reason"
+  }}
+
+select_data: |
+  Select datasets that best support the financial report section.
+
+  Dataset catalog:
+  {data_description}
+
+  Section outline and writing guidance:
+  {section_description}
+
+  Return strict JSON:
+  {{
+    "selected_data_list": ["Dataset name 1", "Dataset name 2"]
+  }}
+
+select_analysis: |
+  Select analysis reports that best support the financial report section.
+
+  Analysis report list:
+  {analysis_description}
+
+  Section outline and writing guidance:
+  {section_description}
+
+  Return strict JSON:
+  {{
+    "selected_analysis_list": ["Analysis title 1", "Analysis title 2"]
+  }}

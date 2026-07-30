@@ -24,6 +24,8 @@ aiohttp
 chardet
 tqdm
 IPython
+yfinance>=0.2.0
+fredapi>=0.5.0
 
 # Document Processing
 pdfplumber
@@ -38,4 +40,7 @@ websockets
 pydantic
 python-multipart
 
+# Test
+pytest>=8.0
+pytest-asyncio>=0.23
 

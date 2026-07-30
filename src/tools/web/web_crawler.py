@@ -14,7 +14,6 @@ from io import BytesIO
 import pdfplumber
 import chardet
 
-from crawl4ai import AsyncWebCrawler
 from openai import OpenAI
 from bs4 import BeautifulSoup
 
@@ -38,6 +37,15 @@ class Click(Tool):
             ],
         )
         self.type = 'tool_click'
+
+    def _build_crawler(self):
+        try:
+            from crawl4ai import AsyncWebCrawler
+
+            return AsyncWebCrawler()
+        except Exception as exc:
+            print(f"crawl4ai unavailable; falling back to HTTP fetch: {exc}")
+            return None
     
     async def fetch_url(self, url: str) -> str:
         headers = {
@@ -84,7 +92,6 @@ class Click(Tool):
         Returns:
             List[ToolResult]: Collected page snippets.
         """
-        crawler = AsyncWebCrawler()
         if isinstance(urls, str):
             urls = [urls]
         try:
@@ -93,8 +100,12 @@ class Click(Tool):
                 if url.endswith(".pdf"):
                     content = await self.extract_pdf_text_async(url)
                 else:
-                    result = await crawler.arun(url=url)
-                    content = str(result.markdown)
+                    crawler = self._build_crawler()
+                    if crawler is not None:
+                        result = await crawler.arun(url=url)
+                        content = str(result.markdown)
+                    else:
+                        content = await self.fetch_url(url)
                     
                     # use naive requests with async to get the content
                     # content = await self.fetch_url(url)
@@ -144,12 +155,15 @@ class Click(Tool):
         Returns:
             str: The extracted text/markdown content.
         """
-        crawler = AsyncWebCrawler()
         if url.endswith(".pdf"):
             content = await self.extract_pdf_text_async(url)
         else:
-            result = await crawler.arun(url=url)
-            content = str(result.markdown)
+            crawler = self._build_crawler()
+            if crawler is not None:
+                result = await crawler.arun(url=url)
+                content = str(result.markdown)
+            else:
+                content = await self.fetch_url(url)
         return content
 
     def extract_json_from_text(self, text: str) -> Dict:

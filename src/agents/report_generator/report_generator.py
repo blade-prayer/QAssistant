@@ -1,5 +1,4 @@
 from typing import List, Dict, Any, Tuple
-import asyncio
 import os
 import re
 import copy
@@ -96,7 +95,7 @@ class ReportGenerator(BaseAgent):
         """
         current_task_data = self.current_task_data
         tool_list = self.tools
-        collect_data_list = self.memory.get_collect_data(exclude_type='search')
+        collect_data_list = self.memory.get_collect_data(exclude_type=['search', 'click'])
         analysis_result_list = self.memory.get_analysis_result()
         
         def _get_data(data_id: int):
@@ -116,8 +115,11 @@ class ReportGenerator(BaseAgent):
         
         def _get_deepsearch_result(query: str):
             """Call deep search agent"""
+            from src.utils.async_bridge import get_async_bridge
+
             ds_agent = tool_list[0]
-            output = asyncio.run(ds_agent.async_run(input_data={
+            bridge = get_async_bridge()
+            output = bridge.run_async(ds_agent.async_run(input_data={
                 'task': current_task_data.get('task', ''),
                 'query': query
             }))
@@ -139,7 +141,7 @@ class ReportGenerator(BaseAgent):
         data_api_description = self.prompt_loader.get_prompt('data_api')
         
         # Prepare data information for the agent
-        collect_data_list = self.memory.get_collect_data(exclude_type='search')
+        collect_data_list = self.memory.get_collect_data(exclude_type=['search', 'click'])
         analysis_result_list = self.memory.get_analysis_result()
         data_info = "\n\n## Available Datasets\n\n"
         for idx, item in enumerate(collect_data_list):
@@ -427,6 +429,10 @@ class ReportGenerator(BaseAgent):
             # TODO: directly set these keys in ToolResult
             name = item.name + '\n' + item.description # used for index
             content = item.source # used for display citation
+            if item.__class__.__name__ == "ClickResult":
+                url = getattr(item, "link", "")
+                title = self.memory.get_url_title(url) or item.name
+                content = f"{title}\n{url}" if url else title
             # content = item.name + '\n' + item.link  # used for display citation
             if content not in [ii['content'] for ii in all_data]:
                 all_data.append({
@@ -449,7 +455,6 @@ class ReportGenerator(BaseAgent):
             section_new_content = []
             for p_paragraph in section._content:
                 content = p_paragraph
-                print(content)
                 # Locate citation placeholders
                 match_list = re.findall(r'\[[Ss]ource[：:]\s*(.*?)\]',content)
                 self.logger.debug(f"Match list: {match_list}")
@@ -460,7 +465,6 @@ class ReportGenerator(BaseAgent):
                     id_list = [item['id'] for item in search_result]  # Get actual data indices
                     self.logger.debug(f"Score list: {score_list}")
                     self.logger.debug(f"ID list: {id_list}")
-                    print(search_result)
                     # Sort by score (descending) and get corresponding indices
                     sorted_idx = np.argsort(score_list)[::-1]
                     score_list = np.array(score_list)

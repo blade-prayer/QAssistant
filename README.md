@@ -143,6 +143,16 @@ cp .env.example .env
 # fill in DS_MODEL_NAME / API keys / base URLs
 ```
 
+Optional runtime variables:
+
+```bash
+# Limit concurrent agents within the same priority tier; default in run_report.py is 3
+MAX_CONCURRENT=3
+
+# Optional. US FRED macro tools degrade gracefully when this is not set.
+FRED_API_KEY=your_fred_key
+```
+
 2) `my_config.yaml` — research target & tasks  
 ```yaml
 target_name: "Your Company Name"
@@ -162,6 +172,9 @@ custom_collect_tasks:
 ```bash
 python run_report.py
 ```
+
+`run_report.py` executes collection, analysis, and report writing by priority.
+Tasks in the same priority tier run concurrently with `MAX_CONCURRENT` as the cap.
 
 **Web Demo**
 ```bash

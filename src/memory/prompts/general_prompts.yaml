@@ -1,0 +1,70 @@
+generate_collect_tasks: &general_collect |
+  You are a research data collection planner.
+
+  Research target:
+  {query}
+
+  Existing collection tasks:
+  {existing_tasks}
+
+  Return a JSON array of at most {max_num} complementary tasks.
+  Cover authoritative background, recent evidence, stakeholder views, historical trends, comparable cases, policy context, and uncertainty checks.
+
+generate_collect_task: *general_collect
+
+generate_analyze_tasks: &general_analysis |
+  You are a research analysis planner.
+
+  Research target:
+  {query}
+
+  Existing analysis tasks:
+  {existing_tasks}
+
+  Return a JSON array of at most {max_num} complementary analysis tasks.
+  Focus on evidence clusters, trends, causal drivers, contradictions, implications, risks, and future scenarios.
+
+generate_task: *general_analysis
+
+select_data_by_llm: |
+  Select the most relevant data items for this research query.
+
+  Query:
+  {query}
+
+  Candidate data:
+  {candidate_items}
+
+  Return strict JSON:
+  {{
+    "selected_indices": [0, 1],
+    "reason": "short reason"
+  }}
+
+select_data: |
+  Select datasets that best support the report section.
+
+  Dataset catalog:
+  {data_description}
+
+  Section outline and writing guidance:
+  {section_description}
+
+  Return strict JSON:
+  {{
+    "selected_data_list": ["Dataset name 1", "Dataset name 2"]
+  }}
+
+select_analysis: |
+  Select prior analysis reports that best support the report section.
+
+  Analysis report list:
+  {analysis_description}
+
+  Section outline and writing guidance:
+  {section_description}
+
+  Return strict JSON:
+  {{
+    "selected_analysis_list": ["Analysis title 1", "Analysis title 2"]
+  }}

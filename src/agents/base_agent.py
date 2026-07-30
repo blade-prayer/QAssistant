@@ -390,8 +390,13 @@ class BaseAgent:
         raise NotImplementedError
     
 
-    def _agent_tool_function(self, tool_name: str, **kwargs):
-        """Execute a tool by name."""
+    def _agent_tool_function(self, tool_name: str = None, **kwargs):
+        """Execute a tool by name from LLM-generated code."""
+        from src.utils.async_bridge import get_async_bridge
+
+        if tool_name is None:
+            raise ValueError("tool_name is required")
+
         target_tool = None
         for tool in self.tools:
             if isinstance(tool, Tool):
@@ -407,19 +412,35 @@ class BaseAgent:
             self.memory.add_log(self.id, None, kwargs, [], error=True, note=f"No available tools for tool_name: {tool_name}")
             return []
 
+        bridge = get_async_bridge()
+        rate_limiter = getattr(self.config, 'rate_limiter', None)
+        if rate_limiter is not None:
+            service = "financial_apis"
+            tool_name_lower = (tool_name or '').lower()
+            if 'search' in tool_name_lower or 'web' in tool_name_lower:
+                service = "search_engines"
+            elif 'fred' in tool_name_lower:
+                service = "fred_api"
+            elif 'us' in tool_name_lower and 'fred' not in tool_name_lower:
+                service = "yfinance"
+            try:
+                bridge.run_async(rate_limiter.acquire(service))
+            except Exception as rl_err:
+                self.logger.debug(f"Rate limiter acquire for {service}: {rl_err}")
+
         try:
             if issubclass(type(target_tool), BaseAgent):
                 if 'task' not in kwargs:
                     kwargs['task'] = self.current_task_data['task']
-                response = asyncio.run(target_tool.async_run(input_data=kwargs))
+                response = bridge.run_async(target_tool.async_run(input_data=kwargs))
                 response = response['final_result']
                 self.memory.add_log(target_tool.id, target_tool.type, kwargs, response, error=False, note=f"Tool {target_tool.name} executed successfully")
                 return response
             elif issubclass(type(target_tool), Tool):
-                response = asyncio.run(target_tool.api_function(**kwargs))
-                response = [item.data for item in response]
-                self.memory.add_log(target_tool.id, target_tool.type, kwargs, response, error=False, note=f"Tool {target_tool.name} executed successfully")
-                return response
+                response = bridge.run_async(target_tool.api_function(**kwargs))
+                data_list = [item.data for item in response]
+                self.memory.add_log(target_tool.id, target_tool.type, kwargs, data_list, error=False, note=f"Tool {target_tool.name} executed successfully")
+                return data_list
             else:
                 self.logger.warning(f"Unknown tools: {tool_name}")
                 self.memory.add_log(self.id, target_tool.type, kwargs, [], error=True, note=f"Unknown tools: {tool_name}")
@@ -430,12 +451,14 @@ class BaseAgent:
             return []
     
     def _get_api_descriptions(self) -> str:
-        desc = ''
+        desc = "The usage of tool calling: `tool_result = call_tool(tool_name='tool_name', **kwargs)`. You can use custom variable names for the tool result.\n\n"
+        desc += "Below are the tools and their descriptions:\n\n"
         for tool in self.tools:
             if issubclass(type(tool), Tool):
                 desc += f"- Tool: {tool.name}\nDescription: {tool.description}\nParameters: {tool.parameters}\n\n"
             elif issubclass(type(tool), BaseAgent):
                 desc += f"- Tool: {tool.AGENT_NAME}\nDescription: {tool.AGENT_DESCRIPTION}\n\n"
+        desc += "The result of each tool is a variable; use `print` to display it when needed."
         return desc
     
     def _check_necessary_data(self, input_data):

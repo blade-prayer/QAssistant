@@ -4,7 +4,6 @@ import json
 import json_repair
 import dill
 from typing import List, Dict, Any, Tuple
-import asyncio
 from threading import Semaphore
 from src.agents.base_agent import BaseAgent
 from src.agents import DeepSearchAgent
@@ -77,12 +76,15 @@ class DataAnalyzer(BaseAgent):
     async def _prepare_executor(self):
         current_task_data = self.current_task_data
         tool_list = self.tools
-        collect_data_list = self.memory.get_collect_data()
+        collect_data_list = self.memory.get_collect_data(exclude_type=['search', 'click'])
         def _get_existed_data(data_id: int):
             return collect_data_list[data_id].data
         def _get_deepsearch_result(query: str):
+            from src.utils.async_bridge import get_async_bridge
+
             ds_agent = tool_list[0]
-            output =  asyncio.run(ds_agent.async_run(input_data={
+            bridge = get_async_bridge()
+            output = bridge.run_async(ds_agent.async_run(input_data={
                 'task': current_task_data['task'],
                 'query': query
             }))
@@ -110,7 +112,7 @@ class DataAnalyzer(BaseAgent):
     async def _prepare_init_prompt(self, input_data: dict) -> list[dict]:
         task = input_data['task']
         enable_chart = input_data['enable_chart']
-        collect_data_list = self.memory.get_collect_data()
+        collect_data_list = self.memory.get_collect_data(exclude_type=['search', 'click'])
         analysis_task = f"Global Research Objective: {task}\n\nAnalysis Task: {input_data['analysis_task']}"
         data_info = await self._format_collect_data(analysis_task, collect_data_list)
 

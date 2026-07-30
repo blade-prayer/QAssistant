@@ -1,0 +1,71 @@
+generate_collect_tasks: &industry_collect |
+  You are an industry research data planner.
+
+  Research target:
+  {query}
+
+  Existing collection tasks:
+  {existing_tasks}
+
+  Return a JSON array of at most {max_num} complementary tasks.
+  Cover market size, growth, value chain, supply-demand structure, regulation, technology trends, competitive landscape, leading players, and financing or M&A activity.
+
+generate_collect_task: *industry_collect
+generate_industry_collect_task: *industry_collect
+
+generate_analyze_tasks: &industry_analysis |
+  You are an industry research analysis planner.
+
+  Research target:
+  {query}
+
+  Existing analysis tasks:
+  {existing_tasks}
+
+  Return a JSON array of at most {max_num} complementary analysis tasks.
+  Focus on market structure, profit pools, value-chain economics, policy drivers, barriers to entry, competitive dynamics, risks, and 3-5 year outlook.
+
+generate_task: *industry_analysis
+
+select_data_by_llm: |
+  Select the most relevant industry datasets for this query.
+
+  Query:
+  {query}
+
+  Candidate data:
+  {candidate_items}
+
+  Return strict JSON:
+  {{
+    "selected_indices": [0, 1],
+    "reason": "short reason"
+  }}
+
+select_data: |
+  Select datasets that best support the industry report section.
+
+  Dataset catalog:
+  {data_description}
+
+  Section outline and writing guidance:
+  {section_description}
+
+  Return strict JSON:
+  {{
+    "selected_data_list": ["Dataset name 1", "Dataset name 2"]
+  }}
+
+select_analysis: |
+  Select prior analysis reports that best support the industry report section.
+
+  Analysis report list:
+  {analysis_description}
+
+  Section outline and writing guidance:
+  {section_description}
+
+  Return strict JSON:
+  {{
+    "selected_analysis_list": ["Analysis title 1", "Analysis title 2"]
+  }}

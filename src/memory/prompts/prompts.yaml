@@ -1,5 +1,5 @@
-generate_collect_tasks: |
-  You are planning the data collection stage for a financial research workflow.
+generate_collect_tasks: &generate_collect_tasks |
+  You are planning the data collection stage for a research workflow.
 
   Research target:
   {query}
@@ -11,10 +11,14 @@ generate_collect_tasks: |
   {existing_tasks}
 
   Return a JSON array of at most {max_num} new collection tasks.
-  Keep every task concise, specific, and distinct from the existing tasks.
+  Each task must specify what evidence, source type, scope, and period to collect.
+  Avoid tasks that duplicate the existing list.
 
-generate_analyze_tasks: |
-  You are planning the analysis stage for a financial research workflow.
+generate_collect_task: *generate_collect_tasks
+generate_industry_collect_task: *generate_collect_tasks
+
+generate_analyze_tasks: &generate_analyze_tasks |
+  You are planning the analysis stage for a research workflow.
 
   Research target:
   {query}
@@ -26,7 +30,10 @@ generate_analyze_tasks: |
   {existing_tasks}
 
   Return a JSON array of at most {max_num} new analysis tasks.
-  Focus on analytical questions, comparisons, and interpretation rather than collection.
+  Focus on interpretation, comparison, causal drivers, risk, outlook, and synthesis.
+  Avoid tasks that duplicate the existing list.
+
+generate_task: *generate_analyze_tasks
 
 select_data_by_llm: |
   You are selecting the most relevant data items for a research query.
@@ -40,3 +47,31 @@ select_data_by_llm: |
   Return a JSON object with:
   - selected_indices: a list of integer indices from the candidate list
   - reason: a short explanation
+
+select_data: |
+  You are selecting datasets to support a report section.
+
+  Dataset catalog:
+  {data_description}
+
+  Section outline and writing guidance:
+  {section_description}
+
+  Return strict JSON:
+  {{
+    "selected_data_list": ["Dataset name 1", "Dataset name 2"]
+  }}
+
+select_analysis: |
+  You are selecting prior analysis reports to support a report section.
+
+  Analysis report list:
+  {analysis_description}
+
+  Section outline and writing guidance:
+  {section_description}
+
+  Return strict JSON:
+  {{
+    "selected_analysis_list": ["Analysis title 1", "Analysis title 2"]
+  }}

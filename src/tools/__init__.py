@@ -6,18 +6,28 @@ This module provides a unified interface for accessing all available financial d
 
 import importlib
 import inspect
+import warnings
 from typing import Dict, List, Type, Any, Optional
 from .base import Tool, ToolResult
 
-from .web.web_crawler import *
-from .web.search_engine_requests import *
-from .web.search_engine_playwright import *
-from .web.base_search import *
-from .macro.macro import *
-from .financial.company_statements import *
-from .financial.stock import *
-from .financial.market import *
-from .industry.industry import *
+_TOOL_MODULES = [
+    ".web.web_crawler",
+    ".web.search_engine_requests",
+    ".web.search_engine_playwright",
+    ".web.base_search",
+    ".macro.macro",
+    ".macro.us_macro",
+    ".financial.company_statements",
+    ".financial.stock",
+    ".financial.market",
+    ".industry.industry",
+]
+
+for _module_name in _TOOL_MODULES:
+    try:
+        importlib.import_module(_module_name, package=__name__)
+    except Exception as exc:
+        warnings.warn(f"Skipping optional tool module {_module_name}: {exc}", stacklevel=2)
 
 # Global registry for all tools
 _REGISTERED_TOOLS: Dict[str, Type[Tool]] = {}

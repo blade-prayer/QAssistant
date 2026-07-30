@@ -16,11 +16,17 @@ from src.utils import setup_logger
 from src.utils import get_logger
 get_logger().set_agent_context('runner', 'main')
 
+IF_RESUME = True
+MAX_CONCURRENT = 3
 
-async def run_report(resume: bool = True):
+
+async def run_report(resume: bool = True, max_concurrent: int = None):
+    """Run report generation with optional concurrency limiting."""
     use_llm_name = os.getenv("DS_MODEL_NAME")
     use_vlm_name = os.getenv("VLM_MODEL_NAME")
     use_embedding_name = os.getenv("EMBEDDING_MODEL_NAME")
+    if max_concurrent is None:
+        max_concurrent = int(os.getenv("MAX_CONCURRENT", "0")) or None
     config = Config(
         config_file_path='my_config.yaml',
         config_dict={}
@@ -34,6 +40,10 @@ async def run_report(resume: bool = True):
     # Initialize logger
     log_dir = os.path.join(config.working_dir, 'logs')
     logger = setup_logger(log_dir=log_dir, log_level=logging.INFO)
+    if max_concurrent:
+        logger.info(f"Concurrency limit: {max_concurrent} tasks")
+    else:
+        logger.info("No concurrency limit (unlimited)")
     
     if resume:
         memory.load()
@@ -185,13 +195,15 @@ async def run_report(resume: bool = True):
     sorted_priorities = sorted(priority_groups.keys())
     for priority in sorted_priorities:
         group = priority_groups[priority]
-        logger.info(f"\nExecuting priority {priority} group ({len(group)} task(s))")
+        agent_resume = group[0]['task_input']['resume']
+        concurrency_info = f" (max concurrent: {max_concurrent})" if max_concurrent else ""
+        logger.info(f"\nExecuting priority {priority} group ({len(group)} task(s){concurrency_info})")
         
         # Skip tasks that already finished
         tasks_to_run = []
         for agent_info in group:
             agent = agent_info['agent']
-            if resume and memory.is_agent_finished(agent.id):
+            if agent_resume and resume and memory.is_agent_finished(agent.id):
                 logger.info(f"Agent {agent.id} already completed; skip")
                 continue
             tasks_to_run.append(agent_info)
@@ -200,13 +212,22 @@ async def run_report(resume: bool = True):
             logger.info(f"All tasks with priority {priority} are complete")
             continue
         
-        # Run tasks within the tier concurrently
+        # Run tasks within the tier concurrently, with an optional cap.
+        semaphore = asyncio.Semaphore(max_concurrent) if max_concurrent else None
+
+        async def run_agent_with_limit(agent_info):
+            agent = agent_info['agent']
+            if semaphore:
+                async with semaphore:
+                    logger.info(f"  Starting agent {agent.id}")
+                    return await agent.async_run(**agent_info['task_input'])
+            logger.info(f"  Starting agent {agent.id}")
+            return await agent.async_run(**agent_info['task_input'])
+
         async_tasks = []
         for agent_info in tasks_to_run:
-            agent = agent_info['agent']
-            logger.info(f"  Starting agent {agent.id}")
             async_tasks.append(asyncio.create_task(
-                agent.async_run(**agent_info['task_input'])
+                run_agent_with_limit(agent_info)
             ))
             
         
@@ -230,5 +251,4 @@ async def run_report(resume: bool = True):
 
 
 if __name__ == '__main__':
-    resume = True
-    asyncio.run(run_report(resume=resume))
+    asyncio.run(run_report(resume=IF_RESUME, max_concurrent=MAX_CONCURRENT))
