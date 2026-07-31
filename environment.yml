@@ -1,9 +1,10 @@
+# Conda 仅负责 Python 运行时与 Pandoc。
+# Python 包由 uv 管理（不用 conda 的 pip:）：
+#   conda activate Competetion
+#   uv pip install -r requirements.txt
 name: Competetion
 channels:
   - conda-forge
 dependencies:
   - python=3.11
-  - pip
   - pandoc
-  - pip:
-      - -r requirements.txt
