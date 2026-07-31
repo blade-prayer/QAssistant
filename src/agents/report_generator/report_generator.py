@@ -423,21 +423,31 @@ class ReportGenerator(BaseAgent):
         """
         Append the reference-data section and replace placeholder citations.
         """
-        collect_data_list = self.memory.get_collect_data() # only use data, without analysis result
+        collect_record_list = self.memory.get_records(exclude_type=["analysis"])
         all_data = []
-        for item in collect_data_list:
-            # TODO: directly set these keys in ToolResult
-            name = item.name + '\n' + item.description # used for index
-            content = item.source # used for display citation
-            if item.__class__.__name__ == "ClickResult":
-                url = getattr(item, "link", "")
-                title = self.memory.get_url_title(url) or item.name
-                content = f"{title}\n{url}" if url else title
-            # content = item.name + '\n' + item.link  # used for display citation
+        for record in collect_record_list:
+            item = record.raw
+            if item is None:
+                continue
+            title = record.metadata.get("search_title") or record.title or getattr(item, "name", "")
+            description = getattr(item, "description", "") or record.content[:500]
+            source = record.source or getattr(item, "source", "")
+            url = record.url or getattr(item, "link", "")
+            if record.memory_type == "document" or record.subtype == "web_page":
+                title = self.memory.get_url_title(url) or title
+
+            name = f"{record.id}\n{title}\n{description}\n{source}"
+            if url:
+                content = f"{record.id} | {title}\n{url}"
+            elif source:
+                content = f"{record.id} | {title}\n{source}"
+            else:
+                content = f"{record.id} | {title}"
             if content not in [ii['content'] for ii in all_data]:
                 all_data.append({
                     'name': name,
-                    'content': content 
+                    'content': content,
+                    'record_id': record.id,
                 })
         self.logger.info(f"Total data for reference: {len(all_data)}")
         

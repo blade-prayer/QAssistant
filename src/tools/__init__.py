@@ -15,6 +15,7 @@ _TOOL_MODULES = [
     ".web.search_engine_requests",
     ".web.search_engine_playwright",
     ".web.base_search",
+    ".document.pdf_report_parser",
     ".macro.macro",
     ".macro.us_macro",
     ".financial.company_statements",
@@ -35,7 +36,8 @@ _TOOL_CATEGORIES: Dict[str, List[str]] = {
     'financial': [],
     'macro': [],
     'industry': [],
-    'web': []
+    'web': [],
+    'document': [],
 }
 
 def register_tool(tool_class: Type[Tool], category: str = 'general') -> Type[Tool]:

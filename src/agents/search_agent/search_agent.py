@@ -78,21 +78,61 @@ class DeepSearchAgent(BaseAgent):
     async def _handle_max_round(self, conversation_history):
         conversation_history = [item["content"] for item in conversation_history]
         analysis_info = "\n\n".join(conversation_history)
-        prompt = f"You have reached the maximum number of running iterations. Directly give the summary of your search process based on the conversation history.\n\nConversation history: {analysis_info}\n\n"
+        available_sources = self._build_available_sources_list()
+        prompt = (
+            "You have reached the maximum number of running iterations. "
+            "Write the best possible evidence-backed report using only the search results "
+            "and browsed pages from this session. Do not invent sources, URLs, figures, or claims. "
+            "Use inline citations in the format [Source: source title] and include a References "
+            "section with exact URLs when available.\n\n"
+            f"Conversation history:\n{analysis_info}\n"
+            f"{available_sources}\n"
+        )
         response = await self.llm.generate(
             messages = [
                 {"role": "user", "content": prompt}
-            ],
-            response_format = {"type": "json_object"}
+            ]
         )
         final_result = response
         return {'coversation_history': conversation_history, 'final_result': final_result}
+
+    def _extract_search_item(self, item, fallback_query: str) -> dict:
+        """Normalize search-tool outputs from dicts or ToolResult-like objects."""
+        if isinstance(item, dict):
+            title = item.get("title") or item.get("name") or ""
+            link = item.get("link") or item.get("url") or item.get("href") or ""
+            description = (
+                item.get("description")
+                or item.get("summary")
+                or item.get("snippet")
+                or item.get("content")
+                or ""
+            )
+            query = item.get("query") or fallback_query
+        else:
+            title = getattr(item, "name", "") or getattr(item, "title", "")
+            link = getattr(item, "link", "") or getattr(item, "url", "") or getattr(item, "href", "")
+            description = (
+                getattr(item, "description", "")
+                or getattr(item, "summary", "")
+                or getattr(item, "snippet", "")
+                or ""
+            )
+            query = getattr(item, "query", "") or fallback_query
+
+        return {
+            "query": str(query or fallback_query),
+            "title": str(title or ""),
+            "link": str(link or "").strip(),
+            "description": str(description or ""),
+        }
     
     async def _handle_search_action(self, action_content):
         search_engine = [item for item in self.tools if 'search' in item.name.lower()][0]
         self.logger.info(f"Search action started: query={action_content}")
         try:
             search_result = await search_engine.api_function(action_content)
+            search_result = search_result or []
             search_result_list = []
             if len(search_result) == 0:
                 result = f"Query `{action_content}` returned no results; please try again."
@@ -100,27 +140,26 @@ class DeepSearchAgent(BaseAgent):
                 result = f"Search results for `{action_content}`\n"
                 
                 for idx, item in enumerate(search_result):
-                    if isinstance(item, dict):
-                        title = item.name
-                        link = item.link
-                        description = item.description
-                        search_result_list.append({
-                            'query': action_content,
-                            'title': title,
-                            'link': link,
-                            'description': description
-                        })
-                        self.link2name[link] = title
-                        # Track this as a valid link for later validation
-                        self.valid_links[link] = {
-                            'title': title,
-                            'description': description,
-                            'query': action_content
-                        }
-                        result += 'Result ' + str(idx + 1) + ':\n'
-                        result += f"Title: {title}\n"
-                        result += f"Link: {link}\n"
-                        result += f"Summary: {description}\n\n"
+                    normalized_item = self._extract_search_item(item, action_content)
+                    title = normalized_item["title"]
+                    link = normalized_item["link"]
+                    description = normalized_item["description"]
+                    if not link:
+                        continue
+                    search_result_list.append(normalized_item)
+                    self.link2name[link] = title
+                    # Track this as a valid link for later validation.
+                    self.valid_links[link] = {
+                        'title': title,
+                        'description': description,
+                        'query': action_content
+                    }
+                    result += 'Result ' + str(len(search_result_list)) + ':\n'
+                    result += f"Title: {title}\n"
+                    result += f"Link: {link}\n"
+                    result += f"Summary: {description}\n\n"
+                if len(search_result_list) == 0:
+                    result += "The search returned results, but none contained clickable URLs. Please try a different query.\n"
             for search_item in search_result:
                 self.memory.add_data(search_item)
             self.memory.add_log(
@@ -188,29 +227,42 @@ class DeepSearchAgent(BaseAgent):
         try:
             self.logger.info(f"Click action started: url={action_content}")
             click_result = await click_engine.api_function([action_content], f'Research goal: {current_task}; query: {query}')
-            if len(click_result) == 0:
+            click_result = click_result or []
+            click_item = click_result[0] if len(click_result) > 0 else None
+            if click_item is None:
                 result = "Failed to fetch content for url: " + action_content
+                self.memory.add_log(
+                    id = click_engine.id,
+                    type=click_engine.type,
+                    input_data = {'url': action_content},
+                    output_data = {"result": result},
+                    error=True,
+                    note=f"Click engine {click_engine.name} returned no content"
+                )
             else:
-                result = click_result[0].data
+                result = getattr(click_item, "data", "")
                 # Track this as a used source with content summary
                 source_title = self.link2name.get(action_content, self.valid_links.get(action_content, {}).get('title', 'Unknown'))
+                result_text = str(result or "")
                 self.used_sources[action_content] = {
                     'title': source_title,
-                    'content_preview': result[:500] if len(result) > 500 else result
+                    'content_preview': result_text[:500]
                 }
-            # add to memory
-            if click_result[0].link in self.link2name:
-                click_result[0].name = self.link2name[click_result[0].link]
-            if not ('error' in click_result[0].name.lower()):
-                self.memory.add_data(click_result[0])
-            self.memory.add_log(
-                id = click_engine.id, 
-                type=click_engine.type,
-                input_data = {'url': action_content}, 
-                output_data = {"result": result}, 
-                error=False, 
-                note=f"Click engine {click_engine.name} executed successfully"
-            )
+                # add to memory
+                click_link = getattr(click_item, "link", "")
+                if click_link in self.link2name:
+                    click_item.name = self.link2name[click_link]
+                click_name = str(getattr(click_item, "name", ""))
+                if not ('error' in click_name.lower()):
+                    self.memory.add_data(click_item)
+                self.memory.add_log(
+                    id = click_engine.id, 
+                    type=click_engine.type,
+                    input_data = {'url': action_content}, 
+                    output_data = {"result": result}, 
+                    error=False, 
+                    note=f"Click engine {click_engine.name} executed successfully"
+                )
             self.logger.info(f"Click action done: url={action_content}")
             
         except Exception as e:

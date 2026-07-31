@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from src.utils.run_context import RunContext, get_run_context, make_run_id
+
 try:
     import dill  # type: ignore
 except Exception:  # pragma: no cover - fallback for lean environments
@@ -66,14 +68,28 @@ class Memory:
         self.log: List[Dict[str, Any]] = []
         self.generated_collect_tasks: List[str] = []
         self.generated_analysis_tasks: List[str] = []
+        self.selection_traces: List[Dict[str, Any]] = []
+        self.run_id = self._resolve_run_id()
         self.metadata: Dict[str, Any] = {
-            "schema_version": 2,
+            "schema_version": 3,
             "created_at": self._now(),
             "updated_at": self._now(),
+            "run_id": self.run_id,
         }
         self._prompt_loader = None
 
         os.makedirs(self.memory_dir, exist_ok=True)
+
+    def _resolve_run_id(self) -> str:
+        config_run_id = getattr(self.config, "run_id", None)
+        if config_run_id:
+            return str(config_run_id)
+
+        config_dict = getattr(self.config, "config", {}) or {}
+        if config_dict.get("run_id"):
+            return str(config_dict.get("run_id"))
+
+        return make_run_id()
 
     def _now(self) -> str:
         return datetime.now().isoformat(timespec="seconds")
@@ -353,6 +369,100 @@ class Memory:
         key_body = ":".join(self._clean_key_part(part) for part in fallback_parts if self._clean_key_part(part))
         return key_body or f"content:{record.content_hash}"
 
+    def _current_context(self) -> RunContext:
+        return get_run_context()
+
+    def _context_value(self, context: RunContext, attr: str) -> Optional[str]:
+        value = getattr(context, attr, "")
+        if value in ("", "N/A", None):
+            return None
+        return str(value)
+
+    def _provenance_event(
+        self,
+        *,
+        event_type: str,
+        kind: str,
+        record: Optional[MemoryRecord] = None,
+        item: Any = None,
+        source_agent_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+        tool_name: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        context = self._current_context()
+        event = context.provenance_event(
+            event_type,
+            kind=kind,
+            source_agent_id=source_agent_id or self._context_value(context, "agent_id"),
+            task_id=task_id or self._context_value(context, "task_id"),
+            tool_name=tool_name or self._context_value(context, "tool_name"),
+            record_id=record.id if record else None,
+            semantic_key=record.semantic_key if record else None,
+            content_hash=record.content_hash if record else None,
+            memory_type=record.memory_type if record else None,
+            subtype=record.subtype if record else None,
+            query=(record.query if record else getattr(item, "query", None)),
+            url=(record.url if record else self._extract_url(item) if item is not None else None),
+            source=(record.source if record else getattr(item, "source", None)),
+        )
+        if extra:
+            event.update({key: value for key, value in extra.items() if value is not None})
+        if not event.get("run_id"):
+            event["run_id"] = self.run_id
+        event["event_id"] = f"prov_{hashlib.sha1(self._json_dumps(event).encode('utf-8')).hexdigest()[:16]}"
+        return event
+
+    def _merge_event_list(self, *event_lists: Any) -> List[Dict[str, Any]]:
+        merged: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw_events in event_lists:
+            if not raw_events:
+                continue
+            events = raw_events if isinstance(raw_events, list) else [raw_events]
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                event_key = str(event.get("event_id") or self._json_dumps(event))
+                if event_key in seen:
+                    continue
+                merged.append(event)
+                seen.add(event_key)
+        return merged
+
+    def _apply_provenance_metadata(
+        self,
+        metadata: Dict[str, Any],
+        event: Dict[str, Any],
+        *,
+        prefer_origin: bool = False,
+    ) -> Dict[str, Any]:
+        updated = dict(metadata or {})
+        existing_provenance = updated.get("provenance", [])
+        updated["provenance"] = self._merge_event_list(existing_provenance, event)
+
+        if prefer_origin or not updated.get("origin"):
+            updated["origin"] = event
+        else:
+            derivation = updated.get("derivation", [])
+            updated["derivation"] = self._merge_event_list(derivation, event)
+        return updated
+
+    def _metadata_parent_record_ids(self, metadata: Dict[str, Any]) -> List[str]:
+        parent_ids: List[str] = []
+        for event in metadata.get("provenance", []) or []:
+            if not isinstance(event, dict):
+                continue
+            for parent_id in event.get("parent_record_ids", []) or []:
+                text = str(parent_id).strip()
+                if text and text not in parent_ids:
+                    parent_ids.append(text)
+        for parent_id in metadata.get("parent_record_ids", []) or []:
+            text = str(parent_id).strip()
+            if text and text not in parent_ids:
+                parent_ids.append(text)
+        return parent_ids
+
     def _score_record(self, record: MemoryRecord) -> tuple[float, Dict[str, float]]:
         type_base = {
             "search": 0.30,
@@ -365,6 +475,10 @@ class Memory:
         source_score = 0.10 if record.source else 0.0
         url_score = 0.10 if record.url else 0.0
         query_score = 0.03 if record.query else 0.0
+        provenance_events = record.metadata.get("provenance", []) or []
+        provenance_score = 0.10 if provenance_events else 0.0
+        parent_score = 0.05 if self._metadata_parent_record_ids(record.metadata) else 0.0
+        directness_score = 0.05 if record.memory_type in {"document", "collect"} and record.url else 0.0
         content_length = len(record.content or "")
         if content_length >= 5000:
             content_score = 0.25
@@ -377,7 +491,17 @@ class Memory:
         else:
             content_score = -0.15
 
-        score = type_base + title_score + source_score + url_score + query_score + content_score
+        score = (
+            type_base
+            + title_score
+            + source_score
+            + url_score
+            + query_score
+            + content_score
+            + provenance_score
+            + parent_score
+            + directness_score
+        )
         if record.memory_type == "search":
             score = min(score, 0.65)
         if record.memory_type == "analysis":
@@ -390,6 +514,9 @@ class Memory:
             "url": url_score,
             "query": query_score,
             "content": content_score,
+            "provenance": provenance_score,
+            "parent_lineage": parent_score,
+            "directness": directness_score,
         }
         return score, scores
 
@@ -401,8 +528,23 @@ class Memory:
         tool_name: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> MemoryRecord:
+        context = self._current_context()
+        source_agent_id = source_agent_id or self._context_value(context, "agent_id")
+        task_id = task_id or self._context_value(context, "task_id")
+        tool_name = tool_name or self._context_value(context, "tool_name")
+
         if isinstance(item, MemoryRecord):
             item.metadata = self._merge_metadata(item.metadata, metadata or {})
+            event = self._provenance_event(
+                event_type="add_data",
+                kind="derivation",
+                record=item,
+                source_agent_id=source_agent_id,
+                task_id=task_id,
+                tool_name=tool_name,
+            )
+            item.metadata = self._apply_provenance_metadata(item.metadata, event)
+            item.quality_score, item.scores = self._score_record(item)
             return item
 
         legacy_type = self._classify_item(item)
@@ -447,19 +589,6 @@ class Memory:
         if memory_type == "search" and title:
             record_metadata.setdefault("search_title", title)
 
-        provenance = {
-            "timestamp": now,
-            "source_agent_id": source_agent_id,
-            "task_id": task_id,
-            "tool_name": tool_name,
-            "query": query,
-            "url": url,
-            "source": source,
-        }
-        if any(value for value in provenance.values() if value != now):
-            record_metadata.setdefault("provenance", [])
-            record_metadata["provenance"].append(provenance)
-
         record = MemoryRecord(
             id="",
             memory_type=memory_type,
@@ -484,6 +613,28 @@ class Memory:
         record.content_hash = self._content_hash(record, item)
         record.semantic_key = self._semantic_key(item, record)
         record.id = self._record_id(record.semantic_key)
+        parent_ids = list(context.parent_record_ids)
+        for parent_id in record_metadata.get("parent_record_ids", []) or []:
+            text = str(parent_id).strip()
+            if text and text not in parent_ids:
+                parent_ids.append(text)
+        event_kind = "derivation" if memory_type == "analysis" or parent_ids else "origin"
+        event = self._provenance_event(
+            event_type="add_data",
+            kind=event_kind,
+            record=record,
+            item=item,
+            source_agent_id=source_agent_id,
+            task_id=task_id,
+            tool_name=tool_name,
+            extra={"parent_record_ids": parent_ids} if parent_ids else None,
+        )
+        record_metadata = self._apply_provenance_metadata(
+            record_metadata,
+            event,
+            prefer_origin=event_kind == "origin",
+        )
+        record.metadata = record_metadata
         record.quality_score, record.scores = self._score_record(record)
         return record
 
@@ -546,7 +697,7 @@ class Memory:
         for key, value in (incoming or {}).items():
             if value in (None, "", [], {}):
                 continue
-            if key in ("provenance", "versions"):
+            if key in ("provenance", "versions", "derivation", "selection_traces"):
                 current = list(merged.get(key, []) or [])
                 incoming_items = value if isinstance(value, list) else [value]
                 seen = {self._json_dumps(item) for item in current}
@@ -556,6 +707,9 @@ class Memory:
                         current.append(item)
                         seen.add(item_key)
                 merged[key] = current
+            elif key == "origin":
+                if not merged.get("origin"):
+                    merged["origin"] = value
             elif key not in merged or merged.get(key) in (None, "", [], {}):
                 merged[key] = value
             elif key == "search_title":
@@ -587,6 +741,19 @@ class Memory:
         if incoming.memory_type == "search" and incoming.title:
             merged_metadata.setdefault("search_title", incoming.title)
 
+        if not merged_metadata.get("origin"):
+            merged_metadata["origin"] = existing.metadata.get("origin") or incoming.metadata.get("origin")
+
+        merged_metadata["provenance"] = self._merge_event_list(
+            existing.metadata.get("provenance", []),
+            incoming.metadata.get("provenance", []),
+        )
+        if merged_metadata.get("origin"):
+            merged_metadata["provenance"] = self._merge_event_list(
+                [merged_metadata["origin"]],
+                merged_metadata["provenance"],
+            )
+
         if existing.content_hash != incoming.content_hash:
             versions = merged_metadata.setdefault("versions", [])
             seen_hashes = {str(item.get("content_hash")) for item in versions if isinstance(item, dict)}
@@ -617,6 +784,10 @@ class Memory:
             scores=base.scores,
             metadata=merged_metadata,
             raw=base.raw,
+        )
+        merged.metadata["selection_traces"] = self._merge_event_list(
+            existing.metadata.get("selection_traces", []),
+            incoming.metadata.get("selection_traces", []),
         )
         return merged
 
@@ -773,15 +944,17 @@ class Memory:
     def _snapshot(self) -> Dict[str, Any]:
         self._rebuild_indexes()
         updated_at = self._now()
-        self.metadata["schema_version"] = 2
+        self.metadata["schema_version"] = 3
+        self.metadata["run_id"] = self.run_id
         self.metadata["updated_at"] = updated_at
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "created_at": self.metadata.get("created_at", self._now()),
             "updated_at": updated_at,
             "metadata": dict(self.metadata),
             "records": self.records,
             "record_order": list(self.record_order),
+            "selection_traces": self.selection_traces,
             "data": self.data,
             "data_signatures": sorted(self.data_signatures),
             "task_mapping": self.task_mapping,
@@ -797,12 +970,15 @@ class Memory:
         self.log = list(snapshot.get("log", []))
         self.generated_collect_tasks = self._normalize_text_list(snapshot.get("generated_collect_tasks", []))
         self.generated_analysis_tasks = self._normalize_text_list(snapshot.get("generated_analysis_tasks", []))
+        self.selection_traces = list(snapshot.get("selection_traces", []))
         raw_metadata = dict(snapshot.get("metadata", {}) or {})
+        self.run_id = str(raw_metadata.get("run_id") or snapshot.get("run_id") or self.run_id or make_run_id())
         self.metadata = {
             **raw_metadata,
-            "schema_version": 2,
+            "schema_version": 3,
             "created_at": raw_metadata.get("created_at", snapshot.get("created_at", self._now())),
             "updated_at": raw_metadata.get("updated_at", snapshot.get("updated_at", self._now())),
+            "run_id": self.run_id,
         }
 
         self.records = {}
@@ -890,6 +1066,76 @@ class Memory:
             for idx, item in enumerate(items)
         ]
 
+    def _record_selection_trace(
+        self,
+        *,
+        operation: str,
+        query: str,
+        candidate_records: List[MemoryRecord],
+        selected_records: List[MemoryRecord],
+        selected_by: str,
+        prompt: str = "",
+        response: Any = None,
+        model_name: Optional[str] = None,
+        note: str = "",
+    ) -> Dict[str, Any]:
+        context = self._current_context()
+        trace_seed = {
+            "operation": operation,
+            "query": query,
+            "selected_by": selected_by,
+            "candidate_ids": [record.id for record in candidate_records],
+            "selected_ids": [record.id for record in selected_records],
+            "timestamp": self._now(),
+            "run_id": self._context_value(context, "run_id") or self.run_id,
+        }
+        trace_id = f"selection_{hashlib.sha1(self._json_dumps(trace_seed).encode('utf-8')).hexdigest()[:16]}"
+        trace = {
+            "trace_id": trace_id,
+            **trace_seed,
+            "agent_id": self._context_value(context, "agent_id"),
+            "agent_name": self._context_value(context, "agent_name"),
+            "task_id": self._context_value(context, "task_id"),
+            "step_id": context.step_id,
+            "tool_name": self._context_value(context, "tool_name"),
+            "model_name": model_name,
+            "candidate_count": len(candidate_records),
+            "selected_count": len(selected_records),
+            "prompt_preview": self._safe_str(prompt, max_chars=2000),
+            "response_preview": self._safe_str(response, max_chars=2000),
+            "note": note,
+        }
+
+        if trace_id not in {item.get("trace_id") for item in self.selection_traces}:
+            self.selection_traces.append(trace)
+
+        event = context.provenance_event(
+            "select_records",
+            kind="selection",
+            selection_trace_id=trace_id,
+            operation=operation,
+            query=query,
+            selected_by=selected_by,
+            selected_ids=[record.id for record in selected_records],
+            candidate_count=len(candidate_records),
+        )
+        event["event_id"] = f"prov_{hashlib.sha1(self._json_dumps(event).encode('utf-8')).hexdigest()[:16]}"
+
+        for record in selected_records:
+            trace_ids = list(record.metadata.get("selection_trace_ids", []) or [])
+            if trace_id not in trace_ids:
+                trace_ids.append(trace_id)
+            record.metadata["selection_trace_ids"] = trace_ids
+            record.metadata["selection_traces"] = self._merge_event_list(
+                record.metadata.get("selection_traces", []),
+                trace,
+            )
+            record.metadata = self._apply_provenance_metadata(record.metadata, event)
+            record.quality_score, record.scores = self._score_record(record)
+
+        self.metadata["updated_at"] = self._now()
+        return trace
+
     def save(self, state: Optional[Dict[str, Any]] = None) -> None:
         if state:
             self.metadata["extra_state"] = state
@@ -941,6 +1187,7 @@ class Memory:
         return item
 
     def add_log(self, *args, **kwargs) -> Dict[str, Any]:
+        context = self._current_context()
         if args:
             agent_id = args[0] if len(args) > 0 else kwargs.get("agent_id") or kwargs.get("id")
             agent_type = args[1] if len(args) > 1 else kwargs.get("type")
@@ -952,14 +1199,32 @@ class Memory:
             input_data = kwargs.get("input_data", {})
             output_data = kwargs.get("output_data", {})
 
+        agent_id = agent_id or self._context_value(context, "agent_id")
+        log_event = context.provenance_event(
+            "add_log",
+            kind="runtime",
+            log_agent_id=agent_id,
+            log_type=agent_type,
+            error=bool(kwargs.get("error", False)),
+            note=kwargs.get("note", ""),
+        )
+        log_event["event_id"] = f"prov_{hashlib.sha1(self._json_dumps(log_event).encode('utf-8')).hexdigest()[:16]}"
+
         entry = {
             "timestamp": self._now(),
             "agent_id": agent_id,
+            "agent_name": self._context_value(context, "agent_name"),
+            "run_id": kwargs.get("run_id") or self._context_value(context, "run_id") or self.run_id,
+            "task_id": kwargs.get("task_id") or self._context_value(context, "task_id"),
+            "step_id": context.step_id,
+            "tool_name": kwargs.get("tool_name") or self._context_value(context, "tool_name"),
+            "parent_record_ids": list(context.parent_record_ids),
             "type": agent_type,
             "input_data": input_data,
             "output_data": output_data,
             "error": bool(kwargs.get("error", False)),
             "note": kwargs.get("note", ""),
+            "provenance": log_event,
         }
         self.log.append(entry)
         self.metadata["updated_at"] = entry["timestamp"]
@@ -1051,6 +1316,19 @@ class Memory:
             )[:top_k]
         return records
 
+    def _resolve_record_reference(self, record_ref: Any) -> Optional[MemoryRecord]:
+        if isinstance(record_ref, MemoryRecord):
+            return record_ref
+        if isinstance(record_ref, str):
+            record = self.get_record(record_ref)
+            if record:
+                return record
+            return self.get_record_by_semantic_key(record_ref)
+        for record in self.records.values():
+            if record.raw is record_ref:
+                return record
+        return None
+
     def get_record(self, record_id: str) -> Optional[MemoryRecord]:
         return self.records.get(str(record_id))
 
@@ -1059,6 +1337,55 @@ class Memory:
         if not record_id:
             return None
         return self.records.get(record_id)
+
+    def get_provenance(self, record_ref: Any) -> List[Dict[str, Any]]:
+        record = self._resolve_record_reference(record_ref)
+        if record is None:
+            return []
+        return self._merge_event_list(
+            [record.metadata.get("origin")] if record.metadata.get("origin") else [],
+            record.metadata.get("provenance", []),
+            record.metadata.get("derivation", []),
+        )
+
+    def get_lineage(self, record_ref: Any, max_depth: int = 5) -> Dict[str, Any]:
+        record = self._resolve_record_reference(record_ref)
+        if record is None:
+            return {}
+
+        visited: set[str] = set()
+
+        def _walk(current: MemoryRecord, depth: int) -> Dict[str, Any]:
+            visited.add(current.id)
+            parent_ids = self._metadata_parent_record_ids(current.metadata)
+            parents = []
+            if depth < max_depth:
+                for parent_id in parent_ids:
+                    parent = self.get_record(parent_id)
+                    if parent is None or parent.id in visited:
+                        continue
+                    parents.append(_walk(parent, depth + 1))
+            return {
+                "record_id": current.id,
+                "semantic_key": current.semantic_key,
+                "memory_type": current.memory_type,
+                "title": current.title,
+                "quality_score": current.quality_score,
+                "parent_record_ids": parent_ids,
+                "provenance": self.get_provenance(current),
+                "parents": parents,
+            }
+
+        return _walk(record, 0)
+
+    def get_selection_traces(self, record_ref: Any = None) -> List[Dict[str, Any]]:
+        if record_ref is None:
+            return list(self.selection_traces)
+        record = self._resolve_record_reference(record_ref)
+        if record is None:
+            return []
+        trace_ids = set(record.metadata.get("selection_trace_ids", []) or [])
+        return [trace for trace in self.selection_traces if trace.get("trace_id") in trace_ids]
 
     def get_collect_data(self, exclude_type: Optional[Any] = None) -> List[Any]:
         exclude_labels = self._normalize_type_filter(exclude_type)
@@ -1501,7 +1828,8 @@ class Memory:
         if model_name is not None:
             use_llm_name = model_name
 
-        candidates = self.get_collect_data()
+        candidate_records = [record for record in self.get_records(exclude_type=["analysis"]) if record.raw is not None]
+        candidates = [record.raw for record in candidate_records]
         if not candidates:
             return [], "No data available"
 
@@ -1509,14 +1837,30 @@ class Memory:
         llm = self._resolve_llm(use_llm_name)
         if loader is None or llm is None:
             selected = self._fallback_rank(query, candidates, top_k)
+            selected_raw_ids = {id(item) for item in selected}
+            selected_records = [record for record in candidate_records if id(record.raw) in selected_raw_ids]
+            self._record_selection_trace(
+                operation="select_data_by_llm",
+                query=query,
+                candidate_records=candidate_records,
+                selected_records=selected_records,
+                selected_by="fallback_similarity",
+                model_name=use_llm_name,
+                note="Prompt loader or LLM unavailable; used similarity fallback.",
+            )
             return selected, "Prompt loader or LLM unavailable; used similarity fallback."
 
+        prompt = ""
+        response: Any = ""
         try:
             prompt_template = loader.get_prompt("select_data_by_llm")
             if prompt_template:
                 candidate_lines = []
                 for candidate in self._load_task_candidates(candidates[: min(len(candidates), 20)]):
-                    candidate_lines.append(f"{candidate['index']}. {candidate['class']}: {candidate['text']}")
+                    record = candidate_records[candidate["index"]]
+                    candidate_lines.append(
+                        f"{candidate['index']}. [{record.id}] {candidate['class']}: {candidate['text']}"
+                    )
                 prompt = prompt_template.format(
                     query=query,
                     candidate_items="\n\n".join(candidate_lines),
@@ -1533,18 +1877,69 @@ class Memory:
             response = await llm.generate(messages=[{"role": "user", "content": prompt}])
             indices = self._parse_selected_indices(response, len(candidates))
             if indices:
-                selected = [candidates[idx] for idx in indices[:top_k]]
+                selected_records = [candidate_records[idx] for idx in indices[:top_k]]
+                selected = [record.raw for record in selected_records]
+                self._record_selection_trace(
+                    operation="select_data_by_llm",
+                    query=query,
+                    candidate_records=candidate_records,
+                    selected_records=selected_records,
+                    selected_by="llm_indices",
+                    prompt=prompt,
+                    response=response,
+                    model_name=use_llm_name,
+                )
                 return selected, str(response)
             names = self._parse_selected_names(response, "selected_data_list")
             if names:
-                selected = [item for item in candidates if getattr(item, "name", None) in names][:top_k]
+                selected_records = [
+                    record
+                    for record in candidate_records
+                    if getattr(record.raw, "name", None) in names or record.title in names
+                ][:top_k]
+                selected = [record.raw for record in selected_records]
                 if selected:
+                    self._record_selection_trace(
+                        operation="select_data_by_llm",
+                        query=query,
+                        candidate_records=candidate_records,
+                        selected_records=selected_records,
+                        selected_by="llm_names",
+                        prompt=prompt,
+                        response=response,
+                        model_name=use_llm_name,
+                    )
                     return selected, self.get_formatted_data_description(selected)
         except Exception as exc:
             selected = self._fallback_rank(query, candidates, top_k)
+            selected_raw_ids = {id(item) for item in selected}
+            selected_records = [record for record in candidate_records if id(record.raw) in selected_raw_ids]
+            self._record_selection_trace(
+                operation="select_data_by_llm",
+                query=query,
+                candidate_records=candidate_records,
+                selected_records=selected_records,
+                selected_by="fallback_after_error",
+                prompt=prompt,
+                response=response,
+                model_name=use_llm_name,
+                note=str(exc),
+            )
             return selected, f"LLM selection failed and fallback was used: {exc}"
 
         selected = self._fallback_rank(query, candidates, top_k)
+        selected_raw_ids = {id(item) for item in selected}
+        selected_records = [record for record in candidate_records if id(record.raw) in selected_raw_ids]
+        self._record_selection_trace(
+            operation="select_data_by_llm",
+            query=query,
+            candidate_records=candidate_records,
+            selected_records=selected_records,
+            selected_by="fallback_no_parse",
+            prompt=prompt,
+            response=response,
+            model_name=use_llm_name,
+        )
         return selected, str(response)
 
     async def select_analysis_result_by_llm(
@@ -1553,7 +1948,8 @@ class Memory:
         max_k: int = -1,
         model_name: Optional[str] = None,
     ) -> tuple[List[Any], str]:
-        candidates = self.get_analysis_result()
+        candidate_records = [record for record in self.get_records(memory_type="analysis") if record.raw is not None]
+        candidates = [record.raw for record in candidate_records]
         if not candidates:
             return [], ""
 
@@ -1562,13 +1958,32 @@ class Memory:
         if loader is None or llm is None:
             limit = len(candidates) if max_k is None or max_k < 0 else max_k
             selected = candidates[:limit]
+            self._record_selection_trace(
+                operation="select_analysis_result_by_llm",
+                query=query,
+                candidate_records=candidate_records,
+                selected_records=candidate_records[:limit],
+                selected_by="fallback_all",
+                model_name=model_name,
+                note="Prompt loader or LLM unavailable.",
+            )
             return selected, self.get_formatted_analysis_result(selected)
 
+        prompt = ""
+        response: Any = ""
         try:
             prompt_template = loader.get_prompt("select_analysis")
             if not prompt_template:
                 limit = len(candidates) if max_k is None or max_k < 0 else max_k
                 selected = candidates[:limit]
+                self._record_selection_trace(
+                    operation="select_analysis_result_by_llm",
+                    query=query,
+                    candidate_records=candidate_records,
+                    selected_records=candidate_records[:limit],
+                    selected_by="fallback_no_prompt",
+                    model_name=model_name,
+                )
                 return selected, self.get_formatted_analysis_result(selected)
             prompt = prompt_template.format(
                 analysis_description=self.get_formatted_analysis_result(candidates),
@@ -1578,16 +1993,37 @@ class Memory:
             )
             response = await llm.generate(messages=[{"role": "user", "content": prompt}])
             names = self._parse_selected_names(response, "selected_analysis_list")
-            selected = [item for item in candidates if getattr(item, "title", None) in names]
+            selected_records = [record for record in candidate_records if getattr(record.raw, "title", None) in names]
             if max_k is not None and max_k > 0:
-                selected = selected[:max_k]
+                selected_records = selected_records[:max_k]
+            selected = [record.raw for record in selected_records]
             if selected:
+                self._record_selection_trace(
+                    operation="select_analysis_result_by_llm",
+                    query=query,
+                    candidate_records=candidate_records,
+                    selected_records=selected_records,
+                    selected_by="llm_names",
+                    prompt=prompt,
+                    response=response,
+                    model_name=model_name,
+                )
                 return selected, self.get_formatted_analysis_result(selected)
-        except Exception:
-            pass
+        except Exception as exc:
+            response = f"selection failed: {exc}"
 
         limit = len(candidates) if max_k is None or max_k < 0 else max_k
         selected = candidates[:limit]
+        self._record_selection_trace(
+            operation="select_analysis_result_by_llm",
+            query=query,
+            candidate_records=candidate_records,
+            selected_records=candidate_records[:limit],
+            selected_by="fallback_no_selection",
+            prompt=prompt,
+            response=response,
+            model_name=model_name,
+        )
         return selected, self.get_formatted_analysis_result(selected)
 
     def _parse_selected_names(self, response: Any, key: str) -> List[str]:

@@ -38,3 +38,12 @@ def test_get_us_macro_tool_by_name():
     cls = get_tool_by_name("US CPI (FRED)")
     assert cls is not None
     assert cls().name == "US CPI (FRED)"
+
+
+def test_document_pdf_parser_tool_is_registered():
+    from src.tools import get_avail_tools, get_tool_by_name
+
+    cls = get_tool_by_name("Local PDF report parser")
+    assert cls is not None
+    assert cls().name == "Local PDF report parser"
+    assert "Local PDF report parser" in get_avail_tools("document")

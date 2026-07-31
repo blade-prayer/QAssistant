@@ -11,6 +11,7 @@ from datetime import datetime
 from src.config import Config
 from src.tools import list_tools, get_tool_by_name
 from src.utils import AsyncCodeExecutor, get_logger
+from src.utils.run_context import RunContext, get_run_context, make_run_id, run_context_scope
 from src.tools.base import Tool
 
 
@@ -90,6 +91,47 @@ class BaseAgent:
     def _load_persist_extra_state(self, state: Dict[str, Any]):
         """Hook for subclasses to restore extra state."""
         return
+
+    def _get_run_id(self) -> str:
+        parent_context = get_run_context()
+        if parent_context.run_id:
+            return parent_context.run_id
+        config_run_id = getattr(self.config, "run_id", None)
+        if config_run_id:
+            return str(config_run_id)
+        config_dict = getattr(self.config, "config", {}) or {}
+        if config_dict.get("run_id"):
+            return str(config_dict.get("run_id"))
+        memory_run_id = getattr(self.memory, "run_id", None)
+        if memory_run_id:
+            return str(memory_run_id)
+        run_id = make_run_id()
+        try:
+            setattr(self.config, "run_id", run_id)
+            config_dict["run_id"] = run_id
+        except Exception:
+            pass
+        try:
+            self.memory.run_id = run_id
+            self.memory.metadata["run_id"] = run_id
+        except Exception:
+            pass
+        return run_id
+
+    def _task_id_from_input(self, input_data: Dict[str, Any]) -> str:
+        if not isinstance(input_data, dict):
+            return ""
+        for key in ("task_id", "analysis_task", "task", "query", "task_content"):
+            value = input_data.get(key)
+            if value:
+                return str(value)
+        nested_input = input_data.get("input_data")
+        if isinstance(nested_input, dict):
+            for key in ("task_id", "analysis_task", "task", "query", "task_content"):
+                value = nested_input.get(key)
+                if value:
+                    return str(value)
+        return ""
     
     @classmethod
     async def from_checkpoint(
@@ -412,43 +454,55 @@ class BaseAgent:
             self.memory.add_log(self.id, None, kwargs, [], error=True, note=f"No available tools for tool_name: {tool_name}")
             return []
 
-        bridge = get_async_bridge()
-        rate_limiter = getattr(self.config, 'rate_limiter', None)
-        if rate_limiter is not None:
-            service = "financial_apis"
-            tool_name_lower = (tool_name or '').lower()
-            if 'search' in tool_name_lower or 'web' in tool_name_lower:
-                service = "search_engines"
-            elif 'fred' in tool_name_lower:
-                service = "fred_api"
-            elif 'us' in tool_name_lower and 'fred' not in tool_name_lower:
-                service = "yfinance"
-            try:
-                bridge.run_async(rate_limiter.acquire(service))
-            except Exception as rl_err:
-                self.logger.debug(f"Rate limiter acquire for {service}: {rl_err}")
+        target_label = getattr(target_tool, "name", getattr(target_tool, "AGENT_NAME", tool_name))
+        target_type = getattr(target_tool, "type", getattr(target_tool, "AGENT_NAME", "unknown_tool"))
+        current_context = get_run_context()
+        tool_context = current_context.next_step(
+            tool_name=target_label,
+            task_id=kwargs.get("task") or kwargs.get("query") or current_context.task_id,
+            phase="tool_call",
+            target_tool_id=getattr(target_tool, "id", ""),
+            target_tool_type=target_type,
+        )
 
-        try:
-            if issubclass(type(target_tool), BaseAgent):
-                if 'task' not in kwargs:
-                    kwargs['task'] = self.current_task_data['task']
-                response = bridge.run_async(target_tool.async_run(input_data=kwargs))
-                response = response['final_result']
-                self.memory.add_log(target_tool.id, target_tool.type, kwargs, response, error=False, note=f"Tool {target_tool.name} executed successfully")
-                return response
-            elif issubclass(type(target_tool), Tool):
-                response = bridge.run_async(target_tool.api_function(**kwargs))
-                data_list = [item.data for item in response]
-                self.memory.add_log(target_tool.id, target_tool.type, kwargs, data_list, error=False, note=f"Tool {target_tool.name} executed successfully")
-                return data_list
-            else:
-                self.logger.warning(f"Unknown tools: {tool_name}")
-                self.memory.add_log(self.id, target_tool.type, kwargs, [], error=True, note=f"Unknown tools: {tool_name}")
+        with run_context_scope(tool_context):
+            bridge = get_async_bridge()
+            rate_limiter = getattr(self.config, 'rate_limiter', None)
+            if rate_limiter is not None:
+                service = "financial_apis"
+                tool_name_lower = (tool_name or '').lower()
+                if 'search' in tool_name_lower or 'web' in tool_name_lower:
+                    service = "search_engines"
+                elif 'fred' in tool_name_lower:
+                    service = "fred_api"
+                elif 'us' in tool_name_lower and 'fred' not in tool_name_lower:
+                    service = "yfinance"
+                try:
+                    bridge.run_async(rate_limiter.acquire(service))
+                except Exception as rl_err:
+                    self.logger.debug(f"Rate limiter acquire for {service}: {rl_err}")
+
+            try:
+                if issubclass(type(target_tool), BaseAgent):
+                    if 'task' not in kwargs:
+                        kwargs['task'] = self.current_task_data.get('task', '')
+                    response = bridge.run_async(target_tool.async_run(input_data=kwargs))
+                    response = response['final_result']
+                    self.memory.add_log(target_tool.id, target_tool.type, kwargs, response, error=False, note=f"Tool {target_tool.name} executed successfully")
+                    return response
+                elif issubclass(type(target_tool), Tool):
+                    response = bridge.run_async(target_tool.api_function(**kwargs))
+                    data_list = [item.data for item in response]
+                    self.memory.add_log(target_tool.id, target_tool.type, kwargs, data_list, error=False, note=f"Tool {target_tool.name} executed successfully")
+                    return data_list
+                else:
+                    self.logger.warning(f"Unknown tools: {tool_name}")
+                    self.memory.add_log(self.id, target_type, kwargs, [], error=True, note=f"Unknown tools: {tool_name}")
+                    return []
+            except Exception as e:
+                self.logger.error(f"Tool {tool_name} execution failed: {e}", exc_info=True)
+                self.memory.add_log(self.id, target_type, kwargs, [], error=True, note=f"Tool {tool_name} executed failed: {e}")
                 return []
-        except Exception as e:
-            self.logger.error(f"Tool {tool_name} execution failed: {e}", exc_info=True)
-            self.memory.add_log(self.id, target_tool.type, kwargs, [], error=True, note=f"Tool {tool_name} executed failed: {e}")
-            return []
     
     def _get_api_descriptions(self) -> str:
         desc = "The usage of tool calling: `tool_result = call_tool(tool_name='tool_name', **kwargs)`. You can use custom variable names for the tool result.\n\n"
@@ -478,94 +532,116 @@ class BaseAgent:
         prompt_function=None,
     ) -> dict:
         """Main execution loop."""
-        # Ensure logger context is set (important for asyncio execution)
-        self.logger.set_agent_context(self.id, self.AGENT_NAME)
-        
-        self._check_necessary_data(input_data)
-        self.current_task_data = input_data
-        await self._prepare_executor()
+        input_data = input_data or {}
+        parent_context = get_run_context()
+        run_id = self._get_run_id()
+        agent_context = parent_context.with_updates(
+            run_id=run_id,
+            agent_id=self.id,
+            agent_name=self.AGENT_NAME,
+            task_id=self._task_id_from_input(input_data),
+            step_id=0,
+            tool_name="",
+            checkpoint_name=checkpoint_name,
+        )
 
-        # Restore or initialize conversation state
-        conversation_history: list[dict]
-        current_round: int
-        if prompt_function is None:
-            prompt_function = self._prepare_init_prompt
-        if resume:
-            state = await self.load(checkpoint_name=checkpoint_name)
-            if state is not None:
-                conversation_history = state.get('conversation_history', [])
-                current_round = int(state.get('current_round', 0))
-                if 'return_dict' in state:
-                    return state['return_dict']
+        with run_context_scope(agent_context):
+            try:
+                setattr(self.config, "run_id", run_id)
+                getattr(self.config, "config", {})["run_id"] = run_id
+                self.memory.run_id = run_id
+                self.memory.metadata["run_id"] = run_id
+            except Exception:
+                pass
+
+            # Ensure logger context is set (important for asyncio execution)
+            self.logger.set_agent_context(self.id, self.AGENT_NAME)
+            
+            self._check_necessary_data(input_data)
+            self.current_task_data = input_data
+            await self._prepare_executor()
+
+            # Restore or initialize conversation state
+            conversation_history: list[dict]
+            current_round: int
+            if prompt_function is None:
+                prompt_function = self._prepare_init_prompt
+            if resume:
+                state = await self.load(checkpoint_name=checkpoint_name)
+                if state is not None:
+                    conversation_history = state.get('conversation_history', [])
+                    current_round = int(state.get('current_round', 0))
+                    if 'return_dict' in state:
+                        return state['return_dict']
+                else:
+                    conversation_history = await prompt_function(input_data)
+                    current_round = 0
             else:
                 conversation_history = await prompt_function(input_data)
                 current_round = 0
-        else:
-            conversation_history = await prompt_function(input_data)
-            current_round = 0
-    
-        while current_round < max_iterations+1:
-            self.logger.info(f"Iteration {current_round + 1}")
-            current_round += 1
-            self.current_round = current_round
-            response = await self.llm.generate(messages = conversation_history, stop=stop_words)
-            action_type, action_content = self._parse_llm_response(response)
-            if echo:
-                self.logger.info(f"LLM response this step: {response}")
-                self.logger.info("--------")
-            # Execute asynchronously
-            action_result = await self._execute_action(action_type, action_content)
-            action_result['llm_response'] = response
-            if echo:
-                self.logger.info(f"Action result this step: {action_result['result']}")
-                self.logger.info("--------")
-            conversation_history.append({"role": "assistant", "content": action_result['llm_response']})
-            conversation_history.append({"role": "user", "content": action_result['result']})
+        
+            while current_round < max_iterations+1:
+                self.logger.info(f"Iteration {current_round + 1}")
+                current_round += 1
+                self.current_round = current_round
+                response = await self.llm.generate(messages = conversation_history, stop=stop_words)
+                action_type, action_content = self._parse_llm_response(response)
+                if echo:
+                    self.logger.info(f"LLM response this step: {response}")
+                    self.logger.info("--------")
+                # Execute asynchronously
+                action_result = await self._execute_action(action_type, action_content)
+                action_result['llm_response'] = response
+                if echo:
+                    self.logger.info(f"Action result this step: {action_result['result']}")
+                    self.logger.info("--------")
+                conversation_history.append({"role": "assistant", "content": action_result['llm_response']})
+                conversation_history.append({"role": "user", "content": action_result['result']})
 
-            # Save each iteration to support resume
+                # Save each iteration to support resume
+                current_state = {
+                    'conversation_history': conversation_history,
+                    'current_round': current_round,
+                    'input_data': input_data,
+                    'stop_words': stop_words,
+                }
+                current_state.update(self._get_persist_extra_state())
+                self.state = current_state
+                await self.save(
+                    state=current_state,
+                    checkpoint_name=checkpoint_name,
+                )
+                
+                if not action_result['continue']:
+                    break
+            
+            return_dict = {}
+            if current_round >= max_iterations and action_result['continue']:
+                # Hit iteration limit; fall back to summary handler
+                return_dict = await self._handle_max_round(conversation_history)
+            else:
+                return_dict = {
+                    'conversation_history': conversation_history,
+                    'final_result': action_result['result'],
+                }
+            return_dict['input_data'] = input_data
+            return_dict['working_dir'] = self.working_dir
+            # Save final state before exiting
             current_state = {
                 'conversation_history': conversation_history,
                 'current_round': current_round,
                 'input_data': input_data,
                 'stop_words': stop_words,
+                'return_dict': return_dict,
             }
             current_state.update(self._get_persist_extra_state())
-            self.state = current_state
             await self.save(
                 state=current_state,
                 checkpoint_name=checkpoint_name,
             )
+            self.memory.save()
             
-            if not action_result['continue']:
-                break
-        
-        return_dict = {}
-        if current_round >= max_iterations and action_result['continue']:
-            # Hit iteration limit; fall back to summary handler
-            return_dict = await self._handle_max_round(conversation_history)
-        else:
-            return_dict = {
-                'conversation_history': conversation_history,
-                'final_result': action_result['result'],
-            }
-        return_dict['input_data'] = input_data
-        return_dict['working_dir'] = self.working_dir
-        # Save final state before exiting
-        current_state = {
-            'conversation_history': conversation_history,
-            'current_round': current_round,
-            'input_data': input_data,
-            'stop_words': stop_words,
-            'return_dict': return_dict,
-        }
-        current_state.update(self._get_persist_extra_state())
-        await self.save(
-            state=current_state,
-            checkpoint_name=checkpoint_name,
-        )
-        self.memory.save()
-        
-        return return_dict
+            return return_dict
 
     async def _handle_max_round(self, conversation_history):
         return {'coversation_history': conversation_history, 'final_result': conversation_history[-1]['content']}

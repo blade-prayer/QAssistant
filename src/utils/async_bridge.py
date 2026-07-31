@@ -10,8 +10,10 @@ for coroutines safely.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import contextvars
 import threading
-from typing import Any, Coroutine
+from typing import Any, Coroutine, Optional
 
 
 class AsyncBridge:
@@ -27,8 +29,35 @@ class AsyncBridge:
         )
         self._thread.start()
 
-    def run_async(self, coro: Coroutine) -> Any:
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+    def run_async(self, coro: Coroutine, context: Optional[contextvars.Context] = None) -> Any:
+        ctx = context or contextvars.copy_context()
+        future: concurrent.futures.Future[Any] = concurrent.futures.Future()
+
+        def _start() -> None:
+            if future.cancelled():
+                return
+            try:
+                task = ctx.run(self._loop.create_task, coro)
+            except Exception as exc:
+                if not future.done():
+                    future.set_exception(exc)
+                return
+
+            def _done(task: asyncio.Task) -> None:
+                if future.cancelled():
+                    return
+                try:
+                    result = task.result()
+                except Exception as exc:  # pragma: no cover - task error path
+                    if not future.done():
+                        future.set_exception(exc)
+                    return
+                if not future.done():
+                    future.set_result(result)
+
+            task.add_done_callback(_done)
+
+        self._loop.call_soon_threadsafe(_start)
         return future.result(timeout=self._timeout)
 
     def shutdown(self) -> None:

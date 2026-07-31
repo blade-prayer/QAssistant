@@ -14,6 +14,7 @@ from src.agents import DataCollector, DataAnalyzer, ReportGenerator
 from src.memory import Memory
 from src.utils import setup_logger
 from src.utils import get_logger
+from src.utils import RunContext, make_run_id, set_run_context
 get_logger().set_agent_context('runner', 'main')
 
 IF_RESUME = True
@@ -46,8 +47,30 @@ async def run_report(resume: bool = True, max_concurrent: int = None):
         logger.info("No concurrency limit (unlimited)")
     
     if resume:
-        memory.load()
-        logger.info("Memory state loaded")
+        loaded_state = memory.load()
+        if loaded_state is not None:
+            logger.info("Memory state loaded")
+        else:
+            logger.info("No persisted memory state found; starting fresh")
+
+    run_id = (
+        memory.metadata.get("run_id") if resume and memory.metadata.get("run_id") else None
+    ) or os.getenv("RUN_ID") or getattr(config, "run_id", None) or make_run_id()
+    setattr(config, "run_id", run_id)
+    config_dict = getattr(config, "config", {}) or {}
+    config_dict["run_id"] = run_id
+    setattr(config, "config", config_dict)
+    memory.run_id = run_id
+    memory.metadata["run_id"] = run_id
+    set_run_context(RunContext(
+        run_id=run_id,
+        agent_id="runner",
+        agent_name="main",
+        task_id="run_report",
+        step_id=0,
+        phase="pipeline",
+    ))
+    logger.info(f"Run id: {run_id}")
     
     # Generate additional collect and analysis tasks using LLM if not already generated
     research_query = f"Research target: {config.config['target_name']} (ticker: {config.config['stock_code']}), target type: {config.config.get('target_type', 'company')}"

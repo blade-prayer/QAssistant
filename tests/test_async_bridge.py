@@ -4,6 +4,7 @@ import threading
 import pytest
 
 from src.utils.async_bridge import AsyncBridge, get_async_bridge
+from src.utils.run_context import RunContext, get_run_context, run_context_scope
 
 
 async def _add(a: int, b: int) -> int:
@@ -18,6 +19,10 @@ async def _fail():
 async def _slow(seconds: float):
     await asyncio.sleep(seconds)
     return "done"
+
+
+async def _read_context():
+    return get_run_context().to_dict()
 
 
 class TestAsyncBridge:
@@ -73,6 +78,27 @@ class TestAsyncBridge:
                 thread.join(timeout=10)
             assert not errors
             assert results == [0, 2, 4, 6, 8]
+        finally:
+            bridge.shutdown()
+
+    def test_run_async_preserves_run_context(self):
+        bridge = AsyncBridge(timeout=10)
+        try:
+            with run_context_scope(RunContext(
+                run_id="run_ctx",
+                agent_id="agent_ctx",
+                agent_name="ctx_agent",
+                task_id="ctx_task",
+                step_id=7,
+                tool_name="ctx_tool",
+            )):
+                result = bridge.run_async(_read_context())
+            assert result["run_id"] == "run_ctx"
+            assert result["agent_id"] == "agent_ctx"
+            assert result["agent_name"] == "ctx_agent"
+            assert result["task_id"] == "ctx_task"
+            assert result["step_id"] == 7
+            assert result["tool_name"] == "ctx_tool"
         finally:
             bridge.shutdown()
 

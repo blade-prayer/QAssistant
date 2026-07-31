@@ -1,0 +1,76 @@
+strategy_brief: |
+  You are a financial research engineer helping reproduce a strategy idea from a local PDF report.
+
+  Goal:
+  - Read the parsed PDF text below.
+  - Extract the strategy logic into a structured strategy_brief JSON object.
+  - Be honest about what is directly confirmed by the PDF, what is inferred, and what is only an implementation assumption.
+
+  Hard boundaries:
+  - Do not claim that any factor, signal, or rule was backtested by this system.
+  - Do not add real data fetching, trading, brokerage, or production execution assumptions.
+  - If the PDF does not specify a formula, parameter, universe, rebalance frequency, or risk rule, put it in missing_information and, if needed, add a clearly labeled implementation_assumptions item.
+  - Cite page-level evidence whenever possible using page_evidence.
+
+  Return format:
+  - Return only one valid JSON object.
+  - Use the following top-level keys:
+    strategy_name, research_goal, asset_universe, factor_definitions, entry_rules, exit_rules,
+    rebalance_frequency, risk_controls, required_input_fields, confirmed_from_pdf,
+    inferred_from_context, implementation_assumptions, missing_information, page_evidence.
+  - page_evidence should be a list of concise objects or strings that include page numbers and the related claim.
+  - Write all natural-language values in {target_language}.
+
+  Source PDF:
+  {source_pdf}
+
+  Parsed PDF:
+  {parsed_report_markdown}
+
+strategy_code: |
+  You are generating auditable sample strategy code from a structured research-report reproduction brief.
+
+  Goal:
+  - Generate sample_strategy.py and README_strategy.md for human review and second-stage development.
+  - The code must be readable, editable, and structurally consistent.
+  - The code must not fetch data from the internet, connect to databases, call trading APIs, run a backtest engine, or output performance metrics.
+
+  Required Python structure:
+  - PARAMS at the top of the file.
+  - load_data_placeholder()
+  - validate_input_schema(df)
+  - compute_factors(df, params)
+  - generate_signals(df, params)
+  - build_target_weights(signals, params)
+  - run_strategy_example(df, params)
+  - main()
+  - if __name__ == "__main__"
+
+  Code requirements:
+  - Keep Python identifiers in English.
+  - Use Chinese docstrings and concise Chinese comments unless target_language requests otherwise.
+  - Centralize tunable values in PARAMS.
+  - validate_input_schema must check required input fields and raise a clear ValueError.
+  - Core functions should mention related PDF page evidence or implementation assumptions in comments/docstrings.
+  - Prefer pandas DataFrame transformations and placeholder logic over framework-specific APIs.
+  - When information is missing, preserve that fact in comments and README instead of inventing it as confirmed.
+
+  README requirements:
+  - Explain the sample nature of the code.
+  - List required input fields.
+  - List confirmed_from_pdf, inferred_from_context, implementation_assumptions, and missing_information.
+  - State that no data download, backtest, return calculation, or investment advice is included.
+
+  Return format:
+  - Return only one valid JSON object.
+  - The object must contain exactly these two string fields:
+    sample_strategy_py and readme_strategy_md.
+
+  Source PDF:
+  {source_pdf}
+
+  Strategy brief JSON:
+  {strategy_brief_json}
+
+  Parsed PDF excerpt for page evidence:
+  {parsed_report_excerpt}
