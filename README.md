@@ -100,15 +100,18 @@ FinSight is still under development and there are many issues and room for impro
 git clone https://github.com/RUC-NLPIR/FinSight.git
 cd FinSight
 
-# Create and activate the Python runtime
+# Create and activate the Python runtime (+ Pandoc)
 conda env create -f environment.yml
 conda activate Competetion
+
+# Install Python packages with uv
+uv pip install -r requirements.txt
 
 # Install the browser used by Playwright-powered web tooling
 python -m playwright install chromium
 ```
 
-`environment.yml` installs Pandoc from conda-forge and delegates Python packages to `requirements.txt`.
+`environment.yml` installs Python 3.11 and Pandoc from conda-forge; Python packages are installed with `uv` from `requirements.txt`.
 DOCX generation requires Pandoc. PDF conversion uses `docx2pdf` and is best-effort because it depends on host desktop support.
 
 Install Pandoc manually only if you are not using the Conda environment:
