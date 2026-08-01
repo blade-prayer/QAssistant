@@ -141,9 +141,9 @@ def validate_tasks_payload(payload: Dict[str, Any]) -> Tuple[List[str], List[str
     errors: List[str] = []
     warnings: List[str] = []
 
-    has_demo_keys = "collect_tasks" in payload or "analysis_tasks" in payload
+    has_ui_legacy_keys = "collect_tasks" in payload or "analysis_tasks" in payload
     has_simple_keys = "custom_collect_tasks" in payload or "custom_analysis_tasks" in payload
-    if not has_demo_keys and not has_simple_keys:
+    if not has_ui_legacy_keys and not has_simple_keys:
         errors.append(
             "Tasks file must contain collect_tasks/analysis_tasks or "
             "custom_collect_tasks/custom_analysis_tasks"

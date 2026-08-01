@@ -39,7 +39,7 @@ class Logger:
     
     def _setup_logger(self, log_dir: Optional[str] = None, log_level: int = logging.INFO):
         """Configure the logging system."""
-        self.logger = logging.getLogger('finsight')
+        self.logger = logging.getLogger('qassistant')
         self.logger.setLevel(log_level)
         
         if self.logger.handlers:
@@ -65,7 +65,7 @@ class Logger:
         
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
-            log_file = os.path.join(log_dir, 'finsight.log')
+            log_file = os.path.join(log_dir, 'qassistant.log')
             
             file_handler = RotatingFileHandler(
                 log_file,
@@ -85,7 +85,7 @@ class Logger:
         else:
             if log_dir:
                 os.makedirs(log_dir, exist_ok=True)
-                log_file = os.path.join(log_dir, 'finsight.log')
+                log_file = os.path.join(log_dir, 'qassistant.log')
                 detailed_formatter = logging.Formatter(
                     '%(asctime)s [%(levelname)s] [%(agent_name)s:%(agent_id)s] %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S'

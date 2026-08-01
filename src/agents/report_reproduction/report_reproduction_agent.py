@@ -268,7 +268,7 @@ class ReportReproductionAgent(BaseAgent):
             f'''\
             """研报复现策略样例代码。
 
-            该文件由 FinSight 研报复现 MVP 自动生成，目标是提供可读、可改、
+            该文件由 QAssistant 研报复现 MVP 自动生成，目标是提供可读、可改、
             结构清晰的策略骨架。它不会联网拉取数据，也不会运行真实回测。
             """
 

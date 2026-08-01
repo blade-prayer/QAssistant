@@ -29,7 +29,7 @@ async def run_report(
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the FinSight report-generation pipeline.")
+    parser = argparse.ArgumentParser(description="Run the QAssistant report-generation pipeline.")
     parser.add_argument("--config", default="my_config.yaml", help="Path to YAML/JSON config file.")
     parser.add_argument("--tasks-file", default=None, help="Optional task JSON/YAML file.")
     parser.add_argument("--resume", dest="resume", action="store_true", default=IF_RESUME, help="Resume from checkpoints.")

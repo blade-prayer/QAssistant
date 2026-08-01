@@ -45,7 +45,7 @@ def test_cli_help_smoke(capsys):
     assert "PDF" in capsys.readouterr().out
 
 
-def test_config_validate_accepts_config_and_demo_tasks(tmp_path, capsys):
+def test_config_validate_accepts_config_and_legacy_tasks(tmp_path, capsys):
     config_path = tmp_path / "config.yaml"
     tasks_path = tmp_path / "tasks.json"
     _write_config(config_path, tmp_path / "outputs")
@@ -84,7 +84,7 @@ def test_outputs_list_json_uses_configured_target_dir(tmp_path, capsys):
     target_dir = output_root / "DemoTarget"
     target_dir.mkdir(parents=True)
     (target_dir / "report.md").write_text("# Report\n", encoding="utf-8")
-    reproduction_dir = target_dir / "report_reproduction" / "demo"
+    reproduction_dir = target_dir / "report_reproduction" / "sample"
     reproduction_dir.mkdir(parents=True)
     (reproduction_dir / "sample_strategy.py").write_text("PARAMS = {}\n", encoding="utf-8")
 

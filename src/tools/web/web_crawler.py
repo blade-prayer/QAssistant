@@ -121,7 +121,7 @@ class Click(Tool):
                     )
                 )
                 # else:    
-                #     # Use an LLM to extract the task-relevant snippets
+                #     # Use an LLM to extract snippets related to the task
                 #     response = llm.generate(
                 #         messages=[
                 #             {"role": "system", "content": CONTENT_SUMMARY_PROMPT},

@@ -98,7 +98,7 @@ async def main():
             assert bridge_context["run_id"] == "run_smoke"
             assert bridge_context["agent_id"] == "agent_memory_test"
 
-        record = DummyRecord("metric", "demo data", {"value": 1}, "unit-test")
+        record = DummyRecord("metric", "sample data", {"value": 1}, "unit-test")
         with run_context_scope(RunContext(
             run_id="run_smoke",
             agent_id="agent_memory_test",

@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "finsight"
+name = "qassistant"
 version = "0.2.0"
-description = "FinSight: multi-agent financial deep research system"
+description = "QAssistant: multi-agent financial research automation CLI"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -35,14 +35,6 @@ web = [
     "crawl4ai>=0.3",
     "playwright>=1.40",
     "fake-useragent>=1.4",
-]
-demo = [
-    "streamlit>=1.30",
-    "fastapi>=0.110",
-    "uvicorn>=0.27",
-    "websockets>=12",
-    "pydantic>=2.0",
-    "python-multipart>=0.0.9",
 ]
 
 [project.scripts]

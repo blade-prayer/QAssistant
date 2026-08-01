@@ -128,9 +128,9 @@ def test_reproduction_runner_passes_cli_arguments_to_agent(tmp_path):
 
         async def async_run(self, input_data, resume):
             calls["run"] = {"input_data": input_data, "resume": resume}
-            out = Path(calls["init"]["config"].working_dir) / "report_reproduction" / "demo"
+            out = Path(calls["init"]["config"].working_dir) / "report_reproduction" / "sample"
             return {
-                "report_id": "demo",
+                "report_id": "sample",
                 "output_dir": str(out),
                 "final_result": str(out / "manifest.json"),
                 "manifest": {"warnings": ["parser warning"]},
@@ -140,7 +140,7 @@ def test_reproduction_runner_passes_cli_arguments_to_agent(tmp_path):
         pdf_path="report.pdf",
         config_file_path="unused.yaml",
         config_overrides={"output_dir": str(tmp_path / "outputs")},
-        report_id="demo",
+        report_id="sample",
         model_name="fake-model",
         max_pages=5,
         config_cls=_make_config_cls(tmp_path),
@@ -153,7 +153,7 @@ def test_reproduction_runner_passes_cli_arguments_to_agent(tmp_path):
     assert calls["init"]["enable_code"] is False
     assert calls["run"]["input_data"] == {
         "pdf_path": "report.pdf",
-        "report_id": "demo",
+        "report_id": "sample",
         "max_pages": 5,
     }
     assert calls["run"]["resume"] is False

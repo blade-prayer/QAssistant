@@ -32,14 +32,6 @@ pdfplumber
 docx2pdf
 python-docx
 
-# Demo
-streamlit
-fastapi
-uvicorn
-websockets
-pydantic
-python-multipart
-
 # Test
 pytest>=8.0
 pytest-asyncio>=0.23
